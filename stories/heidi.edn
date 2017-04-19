@@ -1,0 +1,120 @@
+;; Sample Story
+;;
+;; Based on: http://brasslantern.org/writers/howto/i7tutorial.html
+;;
+
+(refer 'textad.main)
+
+{
+  :name "Heidi"
+  :description "A small example of how to write interactive fiction"
+
+  :no-score true
+  :max-carried 1
+
+  :debug true
+
+  :before_cottage {
+    :name "In front of a cottage"
+    :description "You stand outside a cottage. The forest stretches east."
+    :e_to :forest
+    :in_to "It's such a lovely day -- much too nice to go inside."
+    :messages {:cant-go "The only path lies to the east."}
+    :has #{:light}
+  }
+
+  :cottage {
+    :where :before_cottage
+    :name "tiny cottage"
+    :description "It's small and simple, but you're very happy here."
+    :synonyms #{"tiny cottage", "tiny", "cottage", "home", "house", "hut", "shed", "hovel"}
+    :has #{:scenery :enterable}
+    :interceptors {
+      :before {
+        #{:enter} "It's such a lovely day -- much too nice to go inside."
+      }
+    }
+  }
+
+  :forest {
+    :name "Deep in the forest"
+    :description "Through the dense foliage, you glimpse a building to the west. A track heads to the northeast."
+    :w_to :before_cottage
+    :ne_to :clearing
+    :has #{:light}
+  }
+
+  :bird {
+    :where :forest
+    :name "baby bird"
+    :description "Too young to fly, the nestling tweets helplessly."
+    :synonyms #{"baby bird" "baby" "bird" "nestling"}
+    :interceptors {
+      :before {
+        #{:listen} "It sounds scared and in need of assistance."
+      }
+    }
+  }
+
+  :clearing {
+    :name "A forest clearing"
+    :description "A tall sycamore stands in the middle of this clearing. The path winds southwest through the trees."
+    :sw_to :forest
+    :u_to :top_of_tree
+    :has #{:light}
+  }
+
+  :nest {
+    :where :clearing
+    :name "bird's nest"
+    :description "The nest is carefully woven of twigs and moss."
+    :synonyms #{"bird's nest" "nest" "twigs" "moss"}
+    :has #{:container :open}
+  }
+
+  :tree {
+    :where :clearing
+    :name "tall sycamore tree"
+    :description "Standing proud in the middle of the clearing, the stout tree looks easy to climb."
+    :synonyms #{"tall" "sycamore" "tree" "stout" "proud"}
+    :has #{:scenery}
+    :interceptors {
+      :before {
+        #{:climb} (fn [] (move-to :player :top_of_tree))
+      }
+    }
+  }
+
+  :top_of_tree {
+    :name "At the top of the tree"
+    :description "You cling precariously to the trunk."
+    :d_to :clearing
+    :has #{:light}
+    :interceptors {
+      :before {
+        #{:drop} (fn []
+          (move-to noun :clearing) ; noun is the item being dropped
+          "Dropped... to the ground far below.\n"
+        )
+      }
+    }
+  }
+
+  :branch {
+    :where :top_of_tree
+    :name "wide firm bough"
+    :description "It's flat enough to support a small object."
+    :synonyms #{"wide" "firm" "flat" "bough" "branch"}
+    :has #{:fixed :supporter}
+    :each-turn (fn []
+      (if (and (has-child :nest :bird) (has-child self :nest))
+        (end-game "victory")
+      )
+    )
+  }
+
+  :initial (fn []
+    (move-to :player, :before_cottage)
+    false
+  )
+}

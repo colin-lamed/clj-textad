@@ -1,0 +1,662 @@
+(ns textad.main
+  (:refer-clojure :exclude [second println]))
+
+{
+  :room-score 0
+  :object-score 1
+
+  :player {
+    :name "Player"
+    :synonyms #{"player", "me", "myself"}
+    :description "As good-looking as ever"
+    :article "the"
+    :has #{:animate}
+  }
+
+  :compass {
+    :n_to ["north" "n"]
+    :e_to ["east" "e"]
+    :s_to ["south" "s"]
+    :w_to ["west" "w"]
+    :ne_to ["northeast" "north east" "ne"]
+    :se_to ["southeast" "south east" "se"]
+    :nw_to ["northwest" "north west" "nw"]
+    :sw_to ["southwest" "south west" "sw"]
+    :u_to ["up" "u"]
+    :d_to ["down" "d"]
+    :i_to ["in" "i"]
+    :o_to ["out" "o"]
+  }
+
+  :messages {
+    :no-creature              "Whom do you want to %s to?"
+    :cant-see                 "You can't see any such thing."
+    :not-held                 "You aren't holding that."
+    :bad-number               "I didn't understand that number."
+    :not-animate              "You can only do that to something animate."
+    :not-direction            "I didn't understand that direction."
+
+    ; Group 3 responses - default stubs - should be intercepted by 'before'
+    :darkroom.name            "Darkness"
+    :darkroom.description     "It is pitch dark, and you can't see a thing."
+    :cant-go                  "You can't go that way."
+    :cant-close               "You can't close that!"
+    :already-closed           "%s is already closed."
+    :cant-enter               "You can't enter that!"
+    :already-entered          "You are already in %s."
+    :cant-exit                "You can't exit that!"
+    :not-in                   "You are not in %s."
+    :already-have             "You already have %s."
+    :cant-take                "%s is fixed in place."
+    :cant-take-animate        "I don't suppose %s would care for that."
+    :cant-take-belong-animate "That seems to belong to %s."
+    :cant-take-maxCarried     "You cannot pick up any more items."
+    :cant-open                "You can't open that!"
+    :already-open             "%s is already open."
+    :cant-putin               "You can't put in that!"
+    :cant-puton               "You can't put on that!"
+    :cant-switchon            "You can't switch that on!"
+    :already-switchon         "%s is already on."
+    :cant-switchoff           "You can't switch that off!"
+    :already-switchoff        "%s is already off."
+    :cant-wear                "You can't wear that!"
+    :already-wear             "You are already wearing %s."
+    :cant-disrobe             "You can't take that off!"
+    :already-disrobe          "You are not wearing %s."
+
+    ; command specific messages
+    :score-no-score             "No score available, in %d turns."
+    :score-max-score            "You have so far scored %d out of a possible %d, in %d turns."
+    :score-no-max-score         "You have so far scored %d, in %d turns."
+    :load-existing-positions    "Existing positions in save directory (%s):"
+    :load-failed-corrupted      "Position '%s' is corrupted. Try a different one."
+    :load-failed-notfound       "No position '%s' exists."
+    :load-no-existing-positions "No positions found in save directory (%s)."
+
+  }
+
+  :routines {
+
+    ; --  Group 1 - implemented in code (cannot be intercepted) --
+
+    ; -- Group 2 --
+
+    :close (fn []
+      (cond
+        (not noun) "What do you want to close?"
+        (has-none noun :openable) (message :cant-close)
+        (not (has noun :open))     (message :already-closed (the noun))
+        :else (do
+          (remove-has noun :open)
+          true)))
+
+    :disrobe (fn []
+      (cond
+        (not noun) "What do you want to take off?"
+        (has-none noun :clothing) (message :cant-disrobe (the noun))
+        (has-none noun :worn) (message :already-disrobe (the noun))
+        :else (do
+          (remove-has noun :worn)
+          true)))
+
+    :drop (fn []
+      (cond
+        (not noun) "What do you want to drop?"
+        :else (do (move-to noun location) true)))
+
+    :eat (fn []
+      (cond
+        (not noun) "What do you want to eat?"
+        (has-none noun :editable) "That's plainly inedible."
+        :else (dissoc-child noun)))
+
+    :enter (fn []
+      (cond
+        (not noun) "What do you want to enter?"
+        (and (has-none noun :enterable) (has-none noun :door)) "You can't enter that!"
+        (and (has noun :door) (has-none noun :open)) (str (The noun) (is noun) "closed.")
+        (has-child noun actor) (str "You are already in " (the noun) ".")
+        (has noun :door) (move-to actor (door-to noun))
+        :else (do (move-to actor noun) true)))
+
+    :examine (fn [] (cond
+      (not noun) "What do you want to examine?"
+      :else (str (descr noun))))
+
+    :exit (fn []
+     (cond
+       (not noun) "What do you want to exit?"
+        (has-none noun :enterable) (message :cant-exit (the noun))
+        (not (has-child noun actor)) (message :not-in (the noun))
+        :else (do (move-to actor (parent-for (parent-for actor))) true)))
+
+    :get-off (fn []
+      (cond
+        (not noun) "What do you want to get off?"
+        (has-none noun :supporter) "You can't get off that!"
+        (not (has-child noun actor)) (str "You are not on " (the noun))
+        :else (do (move-to actor (parent-for (parent-for actor))) true)))
+
+    :go (fn [] (routine_go))
+
+    :insert (fn []
+      (cond
+        (not noun) "What do you want to put?"
+        (not second) "What do you want to put that into?"
+        (run-before second :receive) ; generate 'fake event' to give receiver a change to intercept action.
+          (if (has-none second :container)
+            (message :cant-putin (the noun) (the second))
+            (do
+              (move-to noun second) ; TODO we need to specify type of relation? applies to both put on and put in
+              (run-after second :receive))))) ; // generate 'fake event' to give receiver a chance to intercept action.
+
+    :let-go (fn [] true) ; fake event only exists to override
+
+    :lock (fn []
+      (cond
+        (not noun) "What do you want to lock?"
+        (not second) "What do you want to lock it with?"
+        (has-none noun :lockable) "That can't be locked."
+        (has noun :locked) (str (The noun) (if (has noun :pluralname) " are" " is") " already locked.")
+        (not (= (get-in @story [noun :key]) second)) "That is not the correct key."
+        :else (do (add-has noun :locked) true)))
+
+    :look (fn [] (look))
+
+    :open (fn []
+      (cond
+        (not noun) "What do you want to open?"
+        (has-none noun :openable) (message :cant-open)
+        (has noun :open) (message :already-open (the noun))
+        (has noun :locked) (str (the noun) (is noun) "locked.")
+        :else (do
+          (add-has noun :open)
+          true)))
+
+    :put-on (fn []
+      (cond
+        (not noun) "What do you want to put?"
+        (not second) "What do you want to put that onto?"
+        (run-before second :receive) ; generate 'fake event' to give receiver a change to intercept action.
+          (if (has-none second :supporter)
+            (message :cant-puton (the noun) (the second))
+            (do
+              (move-to noun second) ; TODO we need to specify type of relation? applies to both put on and put in
+              (run-after second :receive))))) ; // generate 'fake event' to give receiver a chance to intercept action.
+
+    :receive (fn [] true ) ; fake event only exists to override
+
+    :remove (fn []
+      (cond
+        (not noun) "What do you want to remove?"
+        (not second) "What do you want to remove it from?"
+        (not (has-child noun second)) "It's not in there!"
+        (run-before second :let-go) ; generate 'fake event' to give receiver a change to intercept action.
+          (do
+            (move-to noun (parent-for (parent-for noun)))
+            (run-after second :let-go)))) ;generate 'fake event' to give receiver a change to intercept action.
+
+    :search (fn []
+      (cond
+        (not noun) "What do you want to search?"
+        :else (descr noun)))
+
+    :switch-on (fn []
+      (cond
+        (not noun) "What do you want to switch on?"
+        (has-none noun :switchable) (message :cant-switchon (the noun))
+        (has noun :on) (message "already_switchon" (the noun))
+        :else (do (add-has noun :on) true)))
+
+    :switch-off (fn []
+      (cond
+        (not noun) "What do you want to switch off?"
+        (has-none noun :switchable) (message :cant-switchoff (the noun))
+        (has-none noun :on) (message :already-switchoff (the noun))
+        :else (do (remove-has noun :on) true)))
+
+    :take (fn []
+      (let [parent (get-in @story [noun :where])]
+        (cond
+          (not noun) "What do you want to take?"
+          (has-child actor noun) (str "You already have " (the noun) ".")
+          (or (has noun :scenery) (has noun :fixed)) (str (The noun) " is fixed in place.")
+          (has noun :animate) (str "I don't suppose " (the noun) " would care for that.")
+          (and parent (has parent :animate)) (str "That seems to belong to " (the parent) ".")
+          (and (:max-carried @story) (>= (count (children actor)) (:max-carried @story))) "You cannot pick up any more items."
+          :else (do (move-to noun actor) true))))
+
+    :unlock (fn []
+      (cond
+        (not noun)  "What do you want to unlock?"
+        (not second) "What do you want to unlock that with?"
+        (has-none noun :lockable) "That cannot be unlocked."
+        (has-none noun :locked) (str (The noun) (if (has noun :pluralname) " are" " is") " not locked.")
+        (not (= (get-in @story [noun :key]) second)) "That is not the correct key."
+        :else (do (remove-has noun :locked) true)))
+
+    :wear (fn []
+      (cond
+        (not noun) "What do you want to wear?"
+        (has-none noun :clothing) (message :cant-wear (the noun))
+        (has-none noun :worn) (message :already-wear (the noun))
+        :else (do (add-has noun :worn) true)))
+
+    ; --  some group 3s.. --
+
+    :answer (fn []
+      (cond
+        (not noun) "What do you want to answer?"
+        (not second) "To whom do you want to give that to?"
+        (run-life second :answer) "I don't think much is to be achieved by that."))
+
+    :ask (fn []
+      (cond
+        (not noun) "Who do you want to ask?"
+        (not second) "What do you ask?"
+        (run-life second :ask) "I don't think much is to be achieved by that."))
+
+    :ask-for (fn []
+      (binding [actor noun noun second second actor]
+        (execute :give)))
+
+    :attack (fn []
+      (cond
+        (not noun) "Who do you want to attack?"
+        (or (has-none noun :animate) (run-life noun :attack)) "Violence isn't the answer to this one."))
+
+    :blow (fn [] "You can't usefully blow that.")
+    :burn (fn [] "This dangerous act would achieve little.")
+    :buy (fn [] "Nothing is on sale.")
+    :climb (fn [] "I don't think much is to be achieved by that.")
+    :consult (fn [] (str "You discover nothing of interest in " (the second) "."))
+    :cut (fn [] "Cutting that up would achieve little.")
+    :dig (fn [] "Digging would achieve nothing here.")
+    :drink (fn [] (if noun "There's nothing suitable to drink here."
+                           "What do you want to drink?"))
+    :fill (fn [] "I don't think much is to be achieved by that.")
+
+    :give (fn []
+      (cond
+        (not noun) "What do you want to give?"
+        (not second) "To whom do you want to give that to?"
+        (run-life second :give) (str (The second) (if (has second :pluralname) " don't" " doesn't") " seem interested.")))
+
+    :jump-over (fn [] "You would achieve nothing by this.")
+    :jump (fn [] "You jump on the spot, fruitlessly.")
+
+    :kiss (fn []
+      (cond
+        (not noun) "Who do you want to kiss?"
+        (or (has-none noun :animate) (run-life noun :kiss)) "Keep your mind on the game"))
+
+    :listen (fn [] "You hear nothing unexpected.")
+    :look-under (fn [] "You find nothing of interest.")
+    :pray (fn [] "Nothing practical results from your prayer.")
+    :pull (fn [] "It is fixed in place.")
+    :push (fn [] "It is fixed in place.")
+    :push-dir (fn [] "It is fixed in place.")
+    :rub-dir (fn [] "You achieve nothing by this.")
+    :set-to (fn [] "No, you can't set that to anything.")
+    :set (fn [] "I don't think much is to be achieved by that.")
+
+    :show (fn []
+      (cond
+        (not noun) "What do you want to show?"
+        (not second) "Who do you want to show it to?"
+        (run-life second :show) (str (The second) (if (has second :pluralname) " are" " is") " unimpressed.")))
+
+    :sing (fn [] "Your singing is abominable.")
+    :sleep (fn [] "You aren't feeling especially drowsy.")
+    :smell (fn [] "You smell nothing unexpected.")
+    :squeeze (fn [] "Keep your hands to yourself.")
+    :swim (fn [] "There's not enough water to swim in.")
+    :swing (fn [] "There's nothing sensible to swing here.")
+    :taste (fn [] "You taste nothing unexpected.")
+
+    :tell (fn []
+      (cond
+        (not noun) "Who do you want to tell?"
+        (not second) "What do you want to tell?"
+        (= noun :player) "You talk to yourself a while"
+        (run-life noun :tell) "This provokes no reaction."))
+
+    :think (fn [] "What a good idea.")
+    :throw-at (fn []
+      (cond
+        (not noun) "What do you want to throw?"
+        (not second) "What do you want to throw at?"
+        (run-before second :thrown-at) ; generate 'fake event' to give receiver a change to intercept action.
+          (if (or (has-none second :animate) (run-life second :throw-at))
+            "You lack the nerve when it comes to the crucial moment.")))
+
+    :thrown-at (fn [] false) ; FakeEvent
+    :tie (fn [] "You would achieve nothing by this.")
+    :touch (fn [] "I don't think much is to be achieved by that.")
+    :turn (fn [] "Nothing obvious happens.")
+    :wake (fn [] "The dreadful truth is, this is not a dream.")
+
+    :wake-other (fn []
+      (not noun) "Who do you want to wake?"
+      (run-life noun :wake-other) "That seems unnecessary.")
+
+    :wave (fn [] (str "You look ridiculous waving " (the noun) "."))
+    :wait (fn [] (str "Time passes."))
+  }
+
+  ; -- group 2 success messages - should be intercepted by 'after'
+
+  :library-messages {
+    :interceptors {
+      :after {
+        #{:close}      (fn [] (format "You close %s." (the noun)))
+        #{:disrobe}    (fn [] (format "You take off %s." (the noun)))
+        #{:drop}       (fn [] (format "You drop %s." (the noun)))
+        #{:eat}        (fn [] (format "You eat %s." (the noun)))
+        #{:enter}      (fn [] (format "You enter %s." (the noun)))
+        #{:exit}       (fn [] (format "You exit %s." (the noun)))
+        #{:get-off}    (fn [] (format "You get off %s." (the noun)))
+        #{:give}       (fn [] (format "You give %s to %s." (the noun) (the second)))
+        #{:lock}       (fn [] (format "You lock %s ." (the noun)))
+        #{:open}       (fn [] (format "You open %s." (the noun)))
+        #{:insert}     (fn [] (format "You put %s in %s." (the noun) (the second)))
+        #{:put-on}     (fn [] (format "You put %s on %s." (the noun) (the second)))
+        #{:remove}     (fn [] (format "You remove %s." (the noun)))
+        #{:switch-on}  (fn [] (format "You switch on %s." (the noun)))
+        #{:switch-off} (fn [] (format "You switch off %s." (the noun)))
+        #{:take}       (fn [] (format "You pick up %s." (the noun)))
+        #{:unlock}     (fn [] (format "You unlock %s." (the noun)))
+        #{:wear}       (fn [] (format "You wear %s." (the noun)))
+      }}}
+
+
+
+  :verbs {
+    ; Group 1 - meta
+    ["score"] {
+      "" routine_score}
+
+    ["help"] {
+      "" routine_help}
+
+    ["quit"] {
+      "" routine_quit}
+
+    ["save"] {
+      ""              routine_save
+      "%{noun,topic}" routine_save}
+
+    ["restore"] {
+      ""               routine_restore
+      "%{noun,topic}"  routine_restore}
+
+    ["restart"] {
+      "" routine_restart}
+
+
+    ; debug
+    ; ["goto"] {
+    ; "%{noun,topic}" routine_goto}
+    ; ["showobj"] {
+    ; "%{noun,topic}" routine_showobj}
+    ["trace"] {
+      "%{noun,topic}" routine_trace}
+
+    ; Group 2
+
+    ["close" "close up" "cover" "cover up" "shut" "shut up"] {
+      ""              :close
+      "%{noun,noun}"  :close}
+
+    ["disrobe" "doff" "remove" "shed" "take off"] {
+      ""              :disrobe
+      "%{noun,held}"  :disrobe}
+
+
+    ["take"] {
+      "%{noun,held} off" :disrobe}
+
+    ["drop" "put" "insert" "throw"] {
+      "%{noun,held} (on|onto) %{second,noun}" :put-on}
+
+    ["throw"] {
+      "%{noun,held} (against|at|on|onto) %{second,noun}" :throw-at}
+
+    ["drop" "discard" "put down" "throw"] {
+      ""               :drop
+      "%{noun,held}"   :drop}
+
+    ["eat" "munch" "gobble"] {
+      ""               :eat
+      "%{noun,held}"   :eat}
+
+    ["cross" "enter" "enter in" "enter into" "get in" "get into" "sit on" "walk inside"] {
+      ""            :enter
+      "%{noun,noun}" :enter}
+
+    ["check" "describe" "examine" "l at" "look at" "read" "watch" "x"] {
+      ""              :examine
+      "%{noun,noun}"  :examine}
+
+    ["exit" "get off" "get out" "get up" "leave" "out" "outside" "stand" "stand up"] {
+      ""              :exit
+      "%{noun,noun}"  :exit}
+
+    ["get off"] {
+      ""              :get-off
+      "%{noun,noun}"  :get-off}
+
+    ["feed" "give" "offer" "pay"] {
+      ""                                    :give
+      "%{second,creature} %{noun,held}"     :give
+      "%{noun,held} to %{second,creature}"  :give}
+
+    ["go"] {
+      ""                   :go
+      "%{noun,direction}"  :go}
+
+    ["i" "inv" "inventory" "take inventory"] {
+      ""                   routine_inventory}
+
+    ["l in" "look in" "l inside" "look inside" "l into" "look into" "l through" "look through" "search"] {
+      ""                   :search
+      "%{noun,noun}"       :search}
+
+    ["l" "look"] {
+      ""              :look
+      "%{noun,noun}"  :examine}
+
+    ["close" "lock"] {
+      "%{noun,noun} with %{second,held}"   :lock}
+
+    ["lock"] {
+      "%{noun,noun}"                        :lock}
+
+    ["put" "insert"] {
+      "%{noun,noun} (in|into) %{second,noun}" :insert}
+
+    ["get" "take" "remove"] {
+      "%{noun,noun} from %{second,noun}"    :remove}
+
+    ["screw" "switch" "turn" "twist"] {
+      "on %{noun,noun}"                     :switch-on
+      "%{noun,noun} on"                     :switch-on
+      "off %{noun,noun}"                    :switch-off
+      "%{noun,noun} off"                    :switch-off}
+
+    ["carry" "get" "hold" "pick up" "take"] {
+      ""             :take
+      "%{noun,noun}" :take}
+
+    ["open" "undo" "unlock"] {
+      "%{noun,noun} with %{second,held}"    :unlock}
+
+    ["undo" "unlock"] {
+      "%{noun,noun}"                         :unlock}
+
+    ["open" "uncover" "undo" "unwrap"] {
+      "" :open
+      "%{noun,noun}" :open}
+
+
+    ;-- Group 3 --
+    ;-- default stubs - should be intercepted by 'before' --
+
+    ["don" "put on" "wear"] {
+      ""                                     :wear
+      "%{noun,held}"                         :wear}
+
+    ["answer" "say" "shout" "speak"] {
+      ""                                     :answer
+      "%{noun,topic} to %{second,noun}"      :answer}
+
+    ["ask"] {
+      "%{second,creature} about %{noun,topic}"      :ask
+      "%{noun,creature} for %{second,nounOrTopic}"  :ask-for}
+
+    ["attack" "break" "crack" "destroy" "fight" "hit" "kill" "kick" "murder" "punch" "smash" "thump" "torture" "wreck"] {
+      ""                                     :attack
+      "%{noun,creature}"                     :attackSub}
+
+    ["blow"] {
+      ""                                     :blow
+      "%{noun,noun}"                         :blow}
+
+    ["burn" "light"] {
+      ""                                     :burn
+      "%{noun,noun} with %{second,noun}"     :burn
+      "%{noun,noun}"                         :burn}
+
+    ["buy" "purchase"] {
+      ""                                     :buy
+      "%{noun,noun}"                         :buy}
+
+    ["climb" "climb over" "scale" "scale over"] {
+      ""             :climb
+      "%{noun,noun}" :climb}
+
+    ["consult" "consult about" "look up" "read about" "read"] {
+      ""                                     :consult
+      "%{noun,topic} in %{second,noun}"      :consult}
+
+    ["chop" "cut" "prune" "slice"] {
+      ""                                     :cut
+      "%{noun,noun}"                         :cut}
+
+    ["dig"] {
+      ""                                     :dig
+      "%{noun,noun}"                         :dig
+      "%{noun,noun} with %{second,noun}"     :dig}
+
+    ["drink" "sip" "swallow"] {
+      ""                                     :drink
+      "%{noun,noun}"                         :drink}
+
+    ["fill"] {
+      ""                                     :fill
+      "%{noun,noun}"                         :fill}
+
+    ["hop" "jump" "skip"] {
+      ""                                     :jump
+      "over %{noun,noun}"                    :jump ; -- jump over listed before jump since jump would also match.
+      "%{noun,noun}"                         :jump}
+
+    ["embrace" "hug" "kiss"] {
+      ""                                     :kiss
+      "%{noun,noun}"                         :kiss}
+
+    ["hear" "listen to" "listen"] {
+      ""                                     :listen
+      "%{noun,noun}"                         :listen}
+
+    ["look under"] {
+      ""                                     :look-under
+      "%{noun,noun}"                         :look-under}
+
+    ["pray"] {
+      ""                                     :pray
+      "%{noun,noun}"                         :pray}
+
+    ["drag" "pull"] {
+      ""                                     :pull
+      "%{noun,noun}"                         :pull}
+
+    ["clear" "move" "press" "push" "shift"] {
+      ""                                     :push
+      "%{noun,noun} %{second,direction}"     :push-dir
+      "%{noun,noun}"                         :push}
+
+    ["clean" "dust" "polish" "rub" "scrub" "shine" "sweep" "wipe"] {
+      ""                                     :rub
+      "%{noun,noun}"                         :rub}
+
+    ["adjust" "set"] {
+      ""                                     :set
+      "%{noun,noun} to %{second,number}"     :set-to
+      "%{noun,noun}"                         :set}
+
+    ["show"] {
+      ""                                     :show
+      "%{noun,noun} to %{second,number}"     :show}
+
+    ["sing"] {
+      ""                                     :sing
+      "%{noun,topic}"                        :sing}
+
+    ["nap" "sleep"] {
+      ""                                     :sleep
+      "%{noun,topic}"                        :sleep}
+
+    ["smell" "sniff"] {
+      ""                                     :smell
+      "%{noun,noun}"                         :smell}
+
+    ["squash" "squeeze"] {
+      ""                                     :squeeze
+      "%{noun,noun}"                         :squeeze}
+
+    ["swim" "dive"] {
+      ""                                     :swim
+      "%{noun,topic}"                        :swim}
+
+    ["swing" "swing on"] {
+      ""                                     :swing
+      "%{noun,noun}"                         :swing}
+
+    ["taste" "lick"] {
+      ""                                     :taste
+      "%{noun,noun}"                         :taste}
+
+    ["tell"] {
+      ""                                       :tell
+      "%{noun,creature} about %{second,topic}" :tell}
+
+    ["think"] {
+      ""                                     :think
+      "%{noun,topic}"                        :think}
+
+    ["attach" "fasten" "fix" "tie"] {
+      ""                                     :tie
+      "%{noun,noun} to %{second,noun}"       :tie
+      "%{noun,noun}"                         :tie}
+
+    ["feel" "fondle" "grope" "touch"] {
+      ""                                     :touch
+      "%{noun,noun}"                         :touch}
+
+    ["rotate" "screw" "turn" "twist" "unscrew"] {
+      ""                                     :turn
+      "%{noun,noun}"                         :turn}
+
+    ["wait" "z"] {
+      ""                                     :wait}
+
+    ["awake" "awaken" "wake" "wake up"] {
+      ""                                     :wake
+      "%{noun,creature}"                     :wake-other}
+
+    ["wave"] {
+      ""                                     :wave
+      "%{noun,noun}"                         :wave}
+  }
+}

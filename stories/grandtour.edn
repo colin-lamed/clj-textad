@@ -1,0 +1,153 @@
+;; Sample Story
+;;
+;; Based on: http://brasslantern.org/writers/howto/i7tutorial.html
+;;
+
+(refer 'textad.main)
+
+{
+  :id "game1"
+  :name "The Grand Tour"
+  :release "1"
+  :creationYear "2011"
+  :headline "A short demonstration"
+  :genre "Science Fiction"
+  :description "A small example of how to write interactive fiction"
+
+  :debug true
+
+  :bed {
+    :where :stateroom
+    :name "bed"
+    :synonyms #{"bed", "furniture"}
+    :description "It's your bed"
+    :has #{:fixed :scenery :enterable :supporter}
+    :interceptors {
+      :before {
+        #{:enter} (fn []
+          (println "You climb into the bed, exhaustion overtaking you. You are asleep before you can order Robutler to undress you.\n")
+          (end-game "victory")
+          false
+        )
+      }
+    }
+  }
+
+  :leaflet {
+    :where :bed
+    :name "leaflet"
+    :synonyms #{"leaflet"}
+    :description "It goes on and on about how wonderful the Thaleia is. Should you have trouble sleeping later, reading this could help."
+  }
+
+
+  :mirror {
+    :where :bathroom
+    :name "mirror"
+    :synonyms #{"mirror"}
+    :description "You look tired after your long shuttle flight to the Thaleia."
+    :has #{:fixed, :scenery}
+  }
+
+  :shower {
+    :where :bathroom
+    :name "shower"
+    :synonyms #{"shower"}
+    :has #{:fixed :scenery :openable}
+    :description (fn []
+      (if (has self :open)
+        "The shower is open."
+        "When it's open, you get in it to take a shower. Right now it's closed, keeping you from using it.")
+    )
+    :interceptors {
+      :before {
+        #{:open} "It is locked down until after the ship makes its jump to hyperspace."
+      }
+    }
+  }
+
+  :hallwaydoor {
+    :where :stateroom
+    :name "hallway door"
+    :synonyms #{"hallway door" "door"}
+    :description (fn []
+      (if (has self :open)
+        "The hallway door is open."
+        "The hallway door is closed.")
+    )
+    :has #{:fixed :scenery :openable}
+    :interceptors {
+      :before {
+        #{:open} "The captain has locked all stateroom doors in preparation for jumping to hyperspace."
+      }
+    }
+  }
+
+  :robutler {
+    :where :stateroom
+    :name "Robutler"
+    :description "Robutler has four arms, treads, and a shiny metal body."
+    :synonyms #{"robutler" "robot" "butler"}
+    :has #{:male :animate :proper}
+  }
+
+  :stateroom {
+    :name "Stateroom"
+    :description "Staterooms aboard a spaceship, even one as luxurious as the Thaleia, are tight, cramped affairs, and this one is no exception. There is barely enough room for you and the furniture. The door to the hallway is locked tight for now. East is your bathroom."
+    :e_to :bathroom
+    :has #{:light}
+  }
+
+  :bathroom {
+    :name "Bathroom"
+    :description "Like your stateroom in smallness, only moreso. There is a mirror on one wall and a shower against the opposite."
+    :w_to :stateroom
+    :has #{:light}
+  }
+
+
+
+  :no-score true
+
+  :initial (fn []
+    (move-to :player, :stateroom)
+    "The intercom crackles to life. 'This is your captain speaking. We're jumping to hyperspace shortly, so for your protection, we've locked all stateroom doors. As soon as we've safely jumped, your doors will open and you will be free to move about the ship.'"
+  )
+
+  :rules [
+    ; The basic unit of time in interactive fiction is the turn. A turn consists of the player typing a command and the game responding.
+    (fn []
+      (when (and (> (turn) 0) (not-any? #(= :robutler %) (children location)))
+        (move-to :robutler location)
+        "Robutler rattles into the room, following you."
+      )
+    )
+
+    (fn []
+      (when (= (turn) 10)
+        "You realize that you are becoming exhausted."
+      )
+    )
+
+    (fn []
+      (when (= (turn) 20)
+        "Your exhaustion is threatening to send you crashing to the floor, unable to move."
+      )
+    )
+
+    (fn []
+      (when (= (turn) 25)
+        "You are about to drop dead of exhaustion. You really should get in bed."
+      )
+    )
+    (fn []
+      (when (= (turn) 27)
+        (do
+          (println "You stumble to your knees and then collapse on the floor, quite surprised to find that the phrase 'drop dead of exhaustion' can be literally true.")
+          (end-game "death")
+        )
+      )
+    )
+  ]
+
+}
